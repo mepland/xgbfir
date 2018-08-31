@@ -124,6 +124,16 @@ class XgbModel:
         self._pathMemo = []
         self._maxInteractionDepth = 0
 
+    def dump_model(self, fname):
+        try:
+          f = open(fname, 'w')
+          for itree,tree in enumerate(self.XgbTrees):
+            f.write('booster[{0:d}]:\n'.format(itree))
+            dump_tree(tree, f)
+          f.close()
+        except IOError:
+            print('ERROR can not open {0:s}'.format(fname))
+
     def AddTree(self, tree):
         self.XgbTrees.append(tree)
 
@@ -242,6 +252,11 @@ class XgbTreeNode:
     def __lt__(self, other):
         return self.Number < other.Number
 
+    def dump_node(self, indent, f):
+       if self.IsLeaf:
+         f.write('{0:s}{1:d}:leaf={2},cover={3}\n'.format(indent, self.Number, self.LeafValue, self.Cover))
+       else:
+         f.write('{0:s}{1:d}:[{2:s}<{3}] yes={4:d},no={5:d},missing={4:d},gain={6},cover={7}\n'.format(indent, self.Number, self.Feature, self.SplitValue, self.LeftChild, self.RightChild, self.Gain, self.Cover))
 
 class XgbTree:
     def __init__(self, node):
@@ -249,6 +264,11 @@ class XgbTree:
         self.right = None
         self.node = node  # or node.copy()
 
+def dump_tree(tree, f, indent=''):
+  if not tree is None:
+    tree.node.dump_node(indent, f)
+    dump_tree(tree.left, f, '{0}\t'.format(indent))
+    dump_tree(tree.right, f, '{0}\t'.format(indent))
 
 class XgbModelParser:
     def __init__(self, verbosity=0):
