@@ -169,15 +169,21 @@ class XgbModel:
         return xgbFeatureInteractions
 
     def CollectFeatureInteractions(self, tree, currentInteraction, currentGain, currentCover, pathProbability, depth, deepening):
-        if tree.node.IsLeaf:
+        if tree is None or tree.node.IsLeaf:
             return
 
         currentInteraction.append(tree.node)
         currentGain += tree.node.Gain
         currentCover += tree.node.Cover
 
-        pathProbabilityLeft = pathProbability * (tree.left.node.Cover / tree.node.Cover)
-        pathProbabilityRight = pathProbability * (tree.right.node.Cover / tree.node.Cover)
+        if not tree.left is None:
+          pathProbabilityLeft = pathProbability * (tree.left.node.Cover / tree.node.Cover)
+        else:
+          pathProbabilityLeft = 0.
+        if not tree.right is None:
+          pathProbabilityRight = pathProbability * (tree.right.node.Cover / tree.node.Cover)
+        else:
+          pathProbabilityRight = 0.
 
         fi = FeatureInteraction(currentInteraction, currentGain, currentCover, pathProbability, depth, self._treeIndex, 1)
 
@@ -221,13 +227,13 @@ class XgbModel:
         leftTree = tree.left
         rightTree = tree.right
 
-        if (leftTree.node.IsLeaf and (deepening == 0)):
+        if (not leftTree is None) and (leftTree.node.IsLeaf and (deepening == 0)):
             tfi = self._treeFeatureInteractions.interactions[fi.Name]
             tfi.SumLeafValuesLeft += leftTree.node.LeafValue
             tfi.SumLeafCoversLeft += leftTree.node.Cover
             tfi.HasLeafStatistics = True
 
-        if (rightTree.node.IsLeaf and (deepening == 0)):
+        if (not rightTree is None) and (rightTree.node.IsLeaf and (deepening == 0)):
             tfi = self._treeFeatureInteractions.interactions[fi.Name]
             tfi.SumLeafValuesRight += rightTree.node.LeafValue
             tfi.SumLeafCoversRight += rightTree.node.Cover
@@ -256,7 +262,7 @@ class XgbTreeNode:
        if self.IsLeaf:
          f.write('{0:s}{1:d}:leaf={2},cover={3}\n'.format(indent, self.Number, self.LeafValue, self.Cover))
        else:
-         f.write('{0:s}{1:d}:[{2:s}<{3}] yes={4:d},no={5:d},missing={4:d},gain={6},cover={7}\n'.format(indent, self.Number, self.Feature, self.SplitValue, self.LeftChild, self.RightChild, self.Gain, self.Cover))
+         f.write('{0:s}{1:d}:[{2:s}<{3}] yes={4},no={5},missing={4},gain={6},cover={7}\n'.format(indent, self.Number, self.Feature, self.SplitValue, self.LeftChild, self.RightChild, self.Gain, self.Cover))
 
 class XgbTree:
     def __init__(self, node):
@@ -284,7 +290,7 @@ class XgbModelParser:
             tree.right = XgbTree(self.xgbNodeList[tree.node.RightChild])
             self.ConstructXgbTree(tree.right)
 
-    def ParseXgbTreeNode(self, line):
+    def ParseXgbTreeNode(self, line, constant_features):
         node = XgbTreeNode()
 
         m = self.leafRegex.match(line)
@@ -304,9 +310,16 @@ class XgbModelParser:
             node.Gain = float(m.group(6))
             node.Cover = float(m.group(7))
             node.IsLeaf = False
+
+            if node.Feature in constant_features:
+              if constant_features[node.Feature] < node.SplitValue:
+                node.RightChild = None
+              else:
+                node.LeftChild = None
+
         return node
 
-    def GetXgbModelFromFile(self, fileName, maxTrees):
+    def GetXgbModelFromFile(self, fileName, maxTrees, constant_features={}):
         model = XgbModel(self._verbosity)
         self.xgbNodeList = {}
         numTree = 0
@@ -328,7 +341,7 @@ class XgbModelParser:
                                 print('maxTrees reached')
                             break
                 else:
-                    node = self.ParseXgbTreeNode(line)
+                    node = self.ParseXgbTreeNode(line, constant_features)
                     if not node:
                         return None
                     self.xgbNodeList[node.Number] = node
@@ -345,7 +358,7 @@ class XgbModelParser:
 
         return model
 
-    def GetXgbModelFromMemory(self, dump, maxTrees):
+    def GetXgbModelFromMemory(self, dump, maxTrees, constant_features={}):
         model = XgbModel(self._verbosity)
         self.xgbNodeList = {}
         numTree = 0
@@ -355,7 +368,7 @@ class XgbModelParser:
                 line = line.strip()
                 if not line:
                     continue
-                node = self.ParseXgbTreeNode(line)
+                node = self.ParseXgbTreeNode(line, constant_features)
                 if not node:
                     return None
                 self.xgbNodeList[node.Number] = node
