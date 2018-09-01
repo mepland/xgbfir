@@ -14,7 +14,8 @@ import argparse
 import sys
 import re
 import xlsxwriter
-
+import pandas as pd
+import numpy as np
 
 _comparer = None
 
@@ -176,11 +177,11 @@ class XgbModel:
         currentGain += tree.node.Gain
         currentCover += tree.node.Cover
 
-        if not tree.left is None:
+        if tree.left is not None:
           pathProbabilityLeft = pathProbability * (tree.left.node.Cover / tree.node.Cover)
         else:
           pathProbabilityLeft = 0.
-        if not tree.right is None:
+        if tree.right is not None:
           pathProbabilityRight = pathProbability * (tree.right.node.Cover / tree.node.Cover)
         else:
           pathProbabilityRight = 0.
@@ -227,13 +228,13 @@ class XgbModel:
         leftTree = tree.left
         rightTree = tree.right
 
-        if (not leftTree is None) and (leftTree.node.IsLeaf and (deepening == 0)):
+        if (leftTree is not None) and (leftTree.node.IsLeaf and (deepening == 0)):
             tfi = self._treeFeatureInteractions.interactions[fi.Name]
             tfi.SumLeafValuesLeft += leftTree.node.LeafValue
             tfi.SumLeafCoversLeft += leftTree.node.Cover
             tfi.HasLeafStatistics = True
 
-        if (not rightTree is None) and (rightTree.node.IsLeaf and (deepening == 0)):
+        if (rightTree is not None) and (rightTree.node.IsLeaf and (deepening == 0)):
             tfi = self._treeFeatureInteractions.interactions[fi.Name]
             tfi.SumLeafValuesRight += rightTree.node.LeafValue
             tfi.SumLeafCoversRight += rightTree.node.Cover
@@ -271,7 +272,7 @@ class XgbTree:
         self.node = node  # or node.copy()
 
 def dump_tree(tree, f, indent=''):
-  if not tree is None:
+  if tree is not None:
     tree.node.dump_node(indent, f)
     dump_tree(tree.left, f, '{0}\t'.format(indent))
     dump_tree(tree.right, f, '{0}\t'.format(indent))
@@ -647,6 +648,110 @@ def saveXgbFI(booster, feature_names=None, OutputXlsxFile='XgbFeatureInteraction
     featureInteractions = xgbModel.GetFeatureInteractions(MaxInteractionDepth, MaxDeepening)
     FeatureInteractionsWriter(featureInteractions, OutputXlsxFile, MaxInteractionDepth, TopK, MaxHistograms)
 
+# Adapted from get_score()
+# https://github.com/dmlc/xgboost/blob/4ed8a882405dc5bbfb6cb099a075b8dcdeedecc2/python-package/xgboost/core.py#L1376
+def get_scores(booster, max_trees, constant_features={}, sort_by='gain'):
+
+  allowed_importance_types = ['weight', 'gain', 'cover', 'total_gain', 'total_cover']
+  if sort_by not in allowed_importance_types:
+    raise ValueError('sort_by mismatch, got {0:s} expected one of '.format(sort_by) + repr(allowed_importance_types))
+
+  dump = booster.get_dump('', with_stats=True)
+  xgbParser = XgbModelParser()
+  xgbModel = xgbParser.GetXgbModelFromMemory(dump, max_trees, constant_features)
+
+  fid_results = {}
+
+  for importance_type in ['gain', 'cover']:
+
+    fmap = {}
+    gmap = {}
+
+    def crawl_tree(tree, fmap, gmap):
+      if (tree is not None) and (not tree.node.IsLeaf): # only look at branches, not leaves
+        fid = tree.node.Feature
+
+        if importance_type == 'gain':
+          g = tree.node.Gain
+        else: # cover
+          g = tree.node.Cover
+
+        if fid not in fmap:
+          # if the feature hasn't been seen yet
+          fmap[fid] = 1
+          gmap[fid] = g
+        else:
+          fmap[fid] += 1
+          gmap[fid] += g
+
+        fmap, gmap = crawl_tree(tree.left, fmap, gmap)
+        fmap, gmap = crawl_tree(tree.right, fmap, gmap)
+
+      return fmap, gmap
+
+    for tree in xgbModel.XgbTrees:
+      fmap, gmap = crawl_tree(tree, fmap, gmap)
+
+    for fid in fmap:
+      if fid not in fid_results:
+        # if the feature hasn't been saved yet, need to setup empty inner dict
+        fid_results[fid] = {}
+
+      fid_results[fid]['total_{0:s}'.format(importance_type)] = gmap[fid] # total
+      fid_results[fid][importance_type] = gmap[fid] / float(fmap[fid]) # average
+
+      # do weight
+      if 'weight' not in fid_results[fid]:
+        fid_results[fid]['weight'] = fmap[fid]
+
+  df_scores = pd.DataFrame.from_dict(fid_results, orient='index').reset_index()
+
+  df_scores = df_scores.rename(index=str, columns={'index': 'feature'})
+  df_scores = df_scores.sort_values(by=sort_by, ascending=False).reset_index(drop=True)
+  df_scores = df_scores[['feature'] + allowed_importance_types]
+
+  return df_scores
+
+# Adapted from get_split_value_histogram()
+# https://github.com/dmlc/xgboost/blob/4ed8a882405dc5bbfb6cb099a075b8dcdeedecc2/python-package/xgboost/core.py#L1498
+def get_split_values(booster, max_trees, constant_features={}):
+  dump = booster.get_dump('', with_stats=True)
+  xgbParser = XgbModelParser()
+  xgbModel = xgbParser.GetXgbModelFromMemory(dump, max_trees, constant_features)
+
+  splits = {}
+
+  def crawl_tree(tree, splits):
+    if (tree is not None) and (not tree.node.IsLeaf): # only look at branches, not leaves
+      fid = tree.node.Feature
+      g = tree.node.SplitValue
+
+      if fid not in splits:
+        # if the feature hasn't been seen yet
+        splits[fid] = [g]
+      else:
+        splits[fid].append(float(g))
+
+      splits = crawl_tree(tree.left, splits)
+      splits = crawl_tree(tree.right, splits)
+
+    return splits
+
+  for tree in xgbModel.XgbTrees:
+    splits = crawl_tree(tree, splits)
+
+  for fid in splits:
+    splits[fid] = np.array(splits[fid])
+
+  return splits
+
+# for diagnostic purposes
+def dump_xgbModel(booster, fname, max_trees, constant_features={}):
+  dump = booster.get_dump('', with_stats=True)
+  xgbParser = XgbModelParser()
+  xgbModel = xgbParser.GetXgbModelFromMemory(dump, max_trees, constant_features)
+
+  xgbModel.dump_model(fname)
 
 if __name__ == '__main__':
     entry_point()

@@ -10,6 +10,6 @@
 
 from __future__ import absolute_import
 
-from .main import saveXgbFI
+from .main import saveXgbFI, get_scores, get_split_values, dump_xgbModel
 
-__all__ = ['saveXgbFI']
+__all__ = ['saveXgbFI', 'get_scores', 'get_split_values', 'dump_xgbModel']
