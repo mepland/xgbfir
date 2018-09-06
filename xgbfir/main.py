@@ -650,7 +650,7 @@ def saveXgbFI(booster, feature_names=None, OutputXlsxFile='XgbFeatureInteraction
 
 # Adapted from get_score()
 # https://github.com/dmlc/xgboost/blob/4ed8a882405dc5bbfb6cb099a075b8dcdeedecc2/python-package/xgboost/core.py#L1376
-def get_scores(booster, max_trees, constant_features={}, sort_by='gain'):
+def get_scores(booster, max_trees, constant_features={}, sort_by='gain', expected_features=None):
 
   allowed_importance_types = ['weight', 'gain', 'cover', 'total_gain', 'total_cover']
   if sort_by not in allowed_importance_types:
@@ -704,6 +704,15 @@ def get_scores(booster, max_trees, constant_features={}, sort_by='gain'):
       if 'weight' not in fid_results[fid]:
         fid_results[fid]['weight'] = fmap[fid]
 
+  if expected_features is not None:
+    for fid in expected_features:
+      if fid not in fid_results:
+        fid_results[fid] = {}
+        for importance_type in ['gain', 'cover']:
+          fid_results[fid]['total_{0:s}'.format(importance_type)] = 0.
+          fid_results[fid][importance_type] = 0.
+        fid_results[fid]['weight'] = 0
+
   df_scores = pd.DataFrame.from_dict(fid_results, orient='index').reset_index()
 
   df_scores = df_scores.rename(index=str, columns={'index': 'feature'})
@@ -714,7 +723,7 @@ def get_scores(booster, max_trees, constant_features={}, sort_by='gain'):
 
 # Adapted from get_split_value_histogram()
 # https://github.com/dmlc/xgboost/blob/4ed8a882405dc5bbfb6cb099a075b8dcdeedecc2/python-package/xgboost/core.py#L1498
-def get_split_values(booster, max_trees, constant_features={}):
+def get_split_values(booster, max_trees, constant_features={}, expected_features=None):
   dump = booster.get_dump('', with_stats=True)
   xgbParser = XgbModelParser()
   xgbModel = xgbParser.GetXgbModelFromMemory(dump, max_trees, constant_features)
@@ -742,6 +751,11 @@ def get_split_values(booster, max_trees, constant_features={}):
 
   for fid in splits:
     splits[fid] = np.array(splits[fid])
+
+  if expected_features is not None:
+    for fid in expected_features:
+      if fid not in splits:
+        splits[fid] = None
 
   return splits
 
