@@ -652,6 +652,9 @@ def saveXgbFI(booster, feature_names=None, OutputXlsxFile='XgbFeatureInteraction
 # https://github.com/dmlc/xgboost/blob/4ed8a882405dc5bbfb6cb099a075b8dcdeedecc2/python-package/xgboost/core.py#L1376
 def get_scores(booster, max_trees, constant_features={}, sort_by='gain', expected_features=None):
 
+  if constant_features is None:
+    constant_features={}
+
   allowed_importance_types = ['weight', 'gain', 'cover', 'total_gain', 'total_cover']
   if sort_by not in allowed_importance_types:
     raise ValueError('sort_by mismatch, got {0:s} expected one of '.format(sort_by) + repr(allowed_importance_types))
@@ -724,6 +727,9 @@ def get_scores(booster, max_trees, constant_features={}, sort_by='gain', expecte
 # Adapted from get_split_value_histogram()
 # https://github.com/dmlc/xgboost/blob/4ed8a882405dc5bbfb6cb099a075b8dcdeedecc2/python-package/xgboost/core.py#L1498
 def get_split_values(booster, max_trees, constant_features={}, expected_features=None):
+  if constant_features is None:
+    constant_features={}
+
   dump = booster.get_dump('', with_stats=True)
   xgbParser = XgbModelParser()
   xgbModel = xgbParser.GetXgbModelFromMemory(dump, max_trees, constant_features)
